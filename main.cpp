@@ -17,7 +17,6 @@
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
-// ==================== 구조 체 정의 ====================
 HWND g_hwnd = nullptr;
 ComPtr<ID3D12Device> g_device;
 ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -45,10 +44,9 @@ struct Vertex {
     XMFLOAT2 uv;
 };
 
-// 전방 선언
 void WaitForGpu();
 
-// ==================== 샤이더 ====================
+// ==================== Shader ====================
 const char* g_vertexShader = R"(
 struct VSInput {
     float3 pos : POSITION;
@@ -82,7 +80,7 @@ float4 main(PSInput input) : SV_TARGET0 {
 }
 )";
 
-// ==================== WIC 이미지 로드 ====================
+// ==================== WIC Image Loader ====================
 bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& texture, UINT& width, UINT& height) {
     ComPtr<IWICImagingFactory> wicFactory;
     HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
@@ -99,9 +97,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     UINT w, h;
     frame->GetSize(&w, &h);
     width = w; height = h;
-
-    WICPixelFormatGUID pixelFormat;
-    frame->GetPixelFormat(&pixelFormat);
 
     ComPtr<IWICFormatConverter> converter;
     wicFactory->CreateFormatConverter(&converter);
@@ -188,7 +183,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     return true;
 }
 
-// ==================== 기본 함수 ====================
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProc(hWnd, message, wParam, lParam);
@@ -320,14 +314,26 @@ bool CreatePipelineState() {
     return true;
 }
 
-bool CreateVertexBuffer() {
-    float aspect = 1280.0f / 720.0f;
-    float size = 0.8f;
+// ==================== 이미지 해상도에 맞게 쿼드 생성 ====================
+bool CreateVertexBuffer(float texWidth, float texHeight) {
+    float windowAspect = 1280.0f / 720.0f;
+    float texAspect = texWidth / texHeight;
+
+    float quadWidth, quadHeight;
+
+    if (texAspect > windowAspect) {
+        quadWidth = 1.6f;
+        quadHeight = quadWidth / texAspect * windowAspect;
+    } else {
+        quadHeight = 1.6f;
+        quadWidth = quadHeight * texAspect / windowAspect;
+    }
+
     Vertex vertices[] = {
-        { {-size,  size / aspect, 0.0f}, {0.0f, 0.0f} }, // 좌상
-        { { size,  size / aspect, 0.0f}, {1.0f, 0.0f} }, // 우상
-        { {-size, -size / aspect, 0.0f}, {0.0f, 1.0f} }, // 좌하
-        { { size, -size / aspect, 0.0f}, {1.0f, 1.0f} }  // 우하
+        { {-quadWidth,  quadHeight, 0.0f}, {0.0f, 0.0f} },
+        { { quadWidth,  quadHeight, 0.0f}, {1.0f, 0.0f} },
+        { {-quadWidth, -quadHeight, 0.0f}, {0.0f, 1.0f} },
+        { { quadWidth, -quadHeight, 0.0f}, {1.0f, 1.0f} }
     };
 
     UINT bufferSize = sizeof(vertices);
@@ -393,7 +399,7 @@ void Render() {
     g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
     g_commandList->SetGraphicsRootDescriptorTable(0, g_srvHeap->GetGPUDescriptorHandleForHeapStart());
 
-    g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);  // 수정!
+    g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
     g_commandList->DrawInstanced(4, 1, 0, 0);
 
@@ -427,11 +433,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     if (!InitD3D12(g_hwnd)) { MessageBoxA(nullptr, "D3D12 Init Failed", "Error", MB_OK); return 1; }
     if (!CreatePipelineState()) { MessageBoxA(nullptr, "Pipeline Failed", "Error", MB_OK); return 1; }
-    if (!CreateVertexBuffer()) { MessageBoxA(nullptr, "Vertex Buffer Failed", "Error", MB_OK); return 1; }
 
     UINT texWidth, texHeight;
-    if (!LoadTextureFromFile(L"test.jpg", g_texture, texWidth, texHeight)) {
+    if (!LoadTextureFromFile(L"test.png", g_texture, texWidth, texHeight)) {
         MessageBoxA(nullptr, "test.png file not found!\nPut the image in the same folder as the exe.", "Error", MB_OK);
+        return 1;
+    }
+
+    if (!CreateVertexBuffer((float)texWidth, (float)texHeight)) {
+        MessageBoxA(nullptr, "Vertex Buffer Failed", "Error", MB_OK);
         return 1;
     }
 
