@@ -128,12 +128,13 @@ bool InitD3D12(HWND hwnd) {
     if (FAILED(hr)) return false;
     g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(g_rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    // Manual RTV handle (no d3dx12.h needed)
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < 2; i++) {
         hr = g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i]));
         if (FAILED(hr)) return false;
         g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr, rtvHandle);
-        rtvHandle.Offset(1, g_rtvDescriptorSize);
+        rtvHandle.ptr += g_rtvDescriptorSize;  // offset manually
     }
 
     hr = g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_commandAllocator));
