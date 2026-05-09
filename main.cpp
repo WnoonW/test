@@ -4,7 +4,7 @@
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
-#include <wincodec.h>   // WIC for image loading
+#include <wincodec.h>
 #include <vector>
 #include <string>
 #include <iostream>
@@ -23,7 +23,7 @@ ComPtr<ID3D12Device> g_device;
 ComPtr<ID3D12CommandQueue> g_commandQueue;
 ComPtr<IDXGISwapChain3> g_swapChain;
 ComPtr<ID3D12DescriptorHeap> g_rtvHeap;
-ComPtr<ID3D12DescriptorHeap> g_srvHeap;          // SRV 헝
+ComPtr<ID3D12DescriptorHeap> g_srvHeap;
 ComPtr<ID3D12Resource> g_renderTargets[2];
 ComPtr<ID3D12CommandAllocator> g_commandAllocator;
 ComPtr<ID3D12GraphicsCommandList> g_commandList;
@@ -37,13 +37,16 @@ UINT g_srvDescriptorSize = 0;
 ComPtr<ID3D12RootSignature> g_rootSignature;
 ComPtr<ID3D12PipelineState> g_pipelineState;
 ComPtr<ID3D12Resource> g_vertexBuffer;
-ComPtr<ID3D12Resource> g_texture;                // 텍스처 리소스
+ComPtr<ID3D12Resource> g_texture;
 D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView;
 
 struct Vertex {
     XMFLOAT3 position;
     XMFLOAT2 uv;
 };
+
+// 전방 선언 (WaitForGpu 사용 위해)
+void WaitForGpu();
 
 // ==================== 샤이더 ====================
 const char* g_vertexShader = R"(
@@ -100,7 +103,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     WICPixelFormatGUID pixelFormat;
     frame->GetPixelFormat(&pixelFormat);
 
-    // BGRA8 으로 변환
     ComPtr<IWICFormatConverter> converter;
     wicFactory->CreateFormatConverter(&converter);
     converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
@@ -112,7 +114,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     hr = converter->CopyPixels(nullptr, rowPitch, imageSize, imageData.data());
     if (FAILED(hr)) return false;
 
-    // Texture 생성 (Upload heap 사용)
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -130,7 +131,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
     if (FAILED(hr)) return false;
 
-    // Upload buffer 생성
     ComPtr<ID3D12Resource> uploadBuffer;
     D3D12_HEAP_PROPERTIES uploadHeap = {};
     uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -149,14 +149,12 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer));
     if (FAILED(hr)) return false;
 
-    // 데이터 업로드
     void* pData;
     D3D12_RANGE readRange = {0, 0};
     uploadBuffer->Map(0, &readRange, &pData);
     memcpy(pData, imageData.data(), imageSize);
     uploadBuffer->Unmap(0, nullptr);
 
-    // Copy to texture
     D3D12_TEXTURE_COPY_LOCATION dst = {};
     dst.pResource = texture.Get();
     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -174,7 +172,6 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     g_commandList->Reset(g_commandAllocator.Get(), nullptr);
     g_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
-    // 상태 변경
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -186,19 +183,18 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
 
     ID3D12CommandList* cmdList = g_commandList.Get();
     g_commandQueue->ExecuteCommandLists(1, &cmdList);
-    WaitForGpu();  // 기다리기
+    WaitForGpu();
 
     return true;
 }
 
-// ==================== 기본 초기화 함수 ====================
+// ==================== 기본 함수 ====================
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
 bool InitD3D12(HWND hwnd) {
-    // ... (이전 코드와 동일, 약간 수정)
     ComPtr<IDXGIFactory6> factory;
     CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
 
@@ -245,7 +241,6 @@ bool InitD3D12(HWND hwnd) {
     g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence));
     g_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-    // SRV Descriptor Heap 생성
     D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
     srvDesc.NumDescriptors = 1;
     srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -257,7 +252,6 @@ bool InitD3D12(HWND hwnd) {
 }
 
 bool CreatePipelineState() {
-    // Root Signature with texture
     D3D12_DESCRIPTOR_RANGE range = {};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     range.NumDescriptors = 1;
@@ -297,7 +291,6 @@ bool CreatePipelineState() {
     D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
     g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_rootSignature));
 
-    // Shader compile
     ComPtr<ID3DBlob> vsBlob, psBlob;
     D3DCompile(g_vertexShader, strlen(g_vertexShader), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vsBlob, &errBlob);
     D3DCompile(g_pixelShader, strlen(g_pixelShader), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &psBlob, &errBlob);
@@ -328,14 +321,13 @@ bool CreatePipelineState() {
 }
 
 bool CreateVertexBuffer() {
-    // 텍스처 전체 클랩 (Quad)
     float aspect = 1280.0f / 720.0f;
     float size = 0.8f;
     Vertex vertices[] = {
-        { {-size,  size / aspect, 0.0f}, {0.0f, 0.0f} }, // 좌상
-        { { size,  size / aspect, 0.0f}, {1.0f, 0.0f} }, // 우상
-        { {-size, -size / aspect, 0.0f}, {0.0f, 1.0f} }, // 좌하
-        { { size, -size / aspect, 0.0f}, {1.0f, 1.0f} }  // 우하
+        { {-size,  size / aspect, 0.0f}, {0.0f, 0.0f} },
+        { { size,  size / aspect, 0.0f}, {1.0f, 0.0f} },
+        { {-size, -size / aspect, 0.0f}, {0.0f, 1.0f} },
+        { { size, -size / aspect, 0.0f}, {1.0f, 1.0f} }
     };
 
     UINT bufferSize = sizeof(vertices);
@@ -384,7 +376,6 @@ void Render() {
     g_commandAllocator->Reset();
     g_commandList->Reset(g_commandAllocator.Get(), g_pipelineState.Get());
 
-    // RTV 설정
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     rtvHandle.ptr += g_frameIndex * g_rtvDescriptorSize;
     g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
@@ -397,7 +388,6 @@ void Render() {
     g_commandList->RSSetViewports(1, &viewport);
     g_commandList->RSSetScissorRects(1, &scissor);
 
-    // SRV 바인딩
     ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get() };
     g_commandList->SetDescriptorHeaps(1, heaps);
     g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
@@ -405,7 +395,7 @@ void Render() {
 
     g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
-    g_commandList->DrawInstanced(4, 1, 0, 0);   // Quad = 4 vertices
+    g_commandList->DrawInstanced(4, 1, 0, 0);
 
     g_commandList->Close();
 
@@ -420,7 +410,7 @@ void Cleanup() {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);  // WIC 용
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
     WNDCLASSEX wc = { sizeof(WNDCLASSEX) };
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -429,24 +419,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     wc.lpszClassName = L"DX12ImageDemo";
     RegisterClassEx(&wc);
 
-    g_hwnd = CreateWindowEx(0, L"DX12ImageDemo", L"DirectX 12 - 이미지 텍스처 렌더링", WS_OVERLAPPEDWINDOW,
+    g_hwnd = CreateWindowExW(0, L"DX12ImageDemo", L"DirectX12 Image Texture Demo", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720, nullptr, nullptr, hInstance, nullptr);
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
 
-    if (!InitD3D12(g_hwnd)) { MessageBoxA(nullptr, "D3D12 초기화 실패", "Error", MB_OK); return 1; }
-    if (!CreatePipelineState()) { MessageBoxA(nullptr, "Pipeline 생성 실패", "Error", MB_OK); return 1; }
-    if (!CreateVertexBuffer()) { MessageBoxA(nullptr, "Vertex Buffer 생성 실패", "Error", MB_OK); return 1; }
+    if (!InitD3D12(g_hwnd)) { MessageBoxA(nullptr, "D3D12 Init Failed", "Error", MB_OK); return 1; }
+    if (!CreatePipelineState()) { MessageBoxA(nullptr, "Pipeline Failed", "Error", MB_OK); return 1; }
+    if (!CreateVertexBuffer()) { MessageBoxA(nullptr, "Vertex Buffer Failed", "Error", MB_OK); return 1; }
 
-    // 이미지 로드 (test.png 파일이 프로젝트 폴더에 있어야 함)
     UINT texWidth, texHeight;
     if (!LoadTextureFromFile(L"test.png", g_texture, texWidth, texHeight)) {
-        MessageBoxA(nullptr, "test.png 파일을 찾을 수 없습니다!\n프로젝트 폴더에 이미지를 넣어주세요.", "Error", MB_OK);
+        MessageBoxA(nullptr, "test.png file not found!\nPut the image in the same folder as the exe.", "Error", MB_OK);
         return 1;
     }
 
-    // SRV 생성
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
