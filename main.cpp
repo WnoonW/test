@@ -45,7 +45,7 @@ struct Vertex {
     XMFLOAT2 uv;
 };
 
-// 전방 선언 (WaitForGpu 사용 위해)
+// 전방 선언
 void WaitForGpu();
 
 // ==================== 샤이더 ====================
@@ -324,10 +324,10 @@ bool CreateVertexBuffer() {
     float aspect = 1280.0f / 720.0f;
     float size = 0.8f;
     Vertex vertices[] = {
-        { {-size,  size / aspect, 0.0f}, {0.0f, 0.0f} },
-        { { size,  size / aspect, 0.0f}, {1.0f, 0.0f} },
-        { {-size, -size / aspect, 0.0f}, {0.0f, 1.0f} },
-        { { size, -size / aspect, 0.0f}, {1.0f, 1.0f} }
+        { {-size,  size / aspect, 0.0f}, {0.0f, 0.0f} }, // 좌상
+        { { size,  size / aspect, 0.0f}, {1.0f, 0.0f} }, // 우상
+        { {-size, -size / aspect, 0.0f}, {0.0f, 1.0f} }, // 좌하
+        { { size, -size / aspect, 0.0f}, {1.0f, 1.0f} }  // 우하
     };
 
     UINT bufferSize = sizeof(vertices);
@@ -393,7 +393,7 @@ void Render() {
     g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
     g_commandList->SetGraphicsRootDescriptorTable(0, g_srvHeap->GetGPUDescriptorHandleForHeapStart());
 
-    g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);  // 수정!
     g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
     g_commandList->DrawInstanced(4, 1, 0, 0);
 
