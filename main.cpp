@@ -81,16 +81,24 @@ struct VSOutput {
 
 VSOutput main(VSInput input) {
     VSOutput output;
+    
     float windowAspect = windowWidth / windowHeight;
     float texAspect = texWidth / texHeight;
+    
+    // 안전한 스케일링 (80% 기준)
+    float maxSize = 0.8f;
     float quadWidth, quadHeight;
+    
     if (texAspect > windowAspect) {
-        quadWidth = 0.8f;
-        quadHeight = quadWidth * (texAspect / windowAspect);
+        // 이미지가 더 넓음
+        quadWidth = maxSize;
+        quadHeight = maxSize * (texAspect / windowAspect);
     } else {
-        quadHeight = 0.8f;
-        quadWidth = quadHeight * (windowAspect / texAspect);
+        // 이미지가 더 높음
+        quadHeight = maxSize;
+        quadWidth = maxSize * (windowAspect / texAspect);
     }
+    
     float3 scaledPos = input.pos * float3(quadWidth, quadHeight, 1.0);
     output.pos = float4(scaledPos, 1.0);
     output.uv = input.uv;
@@ -333,7 +341,7 @@ bool CreatePipelineState() {
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;   // 가장 중요! 이 줄 추가
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.MipLODBias = 0;
     sampler.MaxAnisotropy = 0;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
@@ -472,7 +480,7 @@ void Render() {
     g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
     D3D12_VIEWPORT viewport = {0, 0, (float)g_windowWidth, (float)g_windowHeight, 0, 1};
-    D3D12_RECT scissor = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
+    D3D12_RECT scissor = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight };
     g_commandList->RSSetViewports(1, &viewport);
     g_commandList->RSSetScissorRects(1, &scissor);
 
