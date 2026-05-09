@@ -81,10 +81,8 @@ struct VSOutput {
 
 VSOutput main(VSInput input) {
     VSOutput output;
-    
     float windowAspect = windowWidth / windowHeight;
     float texAspect = texWidth / texHeight;
-    
     float quadWidth, quadHeight;
     if (texAspect > windowAspect) {
         quadWidth = 0.8f;
@@ -93,7 +91,6 @@ VSOutput main(VSInput input) {
         quadHeight = 0.8f;
         quadWidth = quadHeight * (windowAspect / texAspect);
     }
-    
     float3 scaledPos = input.pos * float3(quadWidth, quadHeight, 1.0);
     output.pos = float4(scaledPos, 1.0);
     output.uv = input.uv;
@@ -115,19 +112,24 @@ float4 main(PSInput input) : SV_TARGET0 {
 }
 )";
 
-// ==================== WIC Loader ====================
+// ==================== Full WIC Loader ====================
 bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& texture, UINT& width, UINT& height) {
-    // ... (same as before, shortened for space)
     ComPtr<IWICImagingFactory> wicFactory;
-    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
+    if (FAILED(hr)) return false;
 
     ComPtr<IWICBitmapDecoder> decoder;
-    wicFactory->CreateDecoderFromFilename(filename, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    hr = wicFactory->CreateDecoderFromFilename(filename, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    if (FAILED(hr)) return false;
 
     ComPtr<IWICBitmapFrameDecode> frame;
-    decoder->GetFrame(0, &frame);
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr)) return false;
 
-    frame->GetSize(&width, &height);
+    UINT w, h;
+    frame->GetSize(&w, &h);
+    width = w;
+    height = h;
     g_texWidth = width;
     g_texHeight = height;
 
@@ -138,7 +140,9 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     UINT rowPitch = width * 4;
     UINT imageSize = rowPitch * height;
     std::vector<BYTE> imageData(imageSize);
-    converter->CopyPixels(nullptr, rowPitch, imageSize, imageData.data());
+
+    hr = converter->CopyPixels(nullptr, rowPitch, imageSize, imageData.data());
+    if (FAILED(hr)) return false;
 
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -153,16 +157,68 @@ bool LoadTextureFromFile(const wchar_t* filename, ComPtr<ID3D12Resource>& textur
     texDesc.SampleDesc.Count = 1;
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
-    g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
+    hr = g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
+    if (FAILED(hr)) return false;
 
-    // Upload buffer + copy (same as previous version)
-    // ... (omitted for brevity, same logic)
+    ComPtr<ID3D12Resource> uploadBuffer;
+    D3D12_HEAP_PROPERTIES uploadHeap = {};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC uploadDesc = {};
+    uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    uploadDesc.Width = imageSize;
+    uploadDesc.Height = 1;
+    uploadDesc.DepthOrArraySize = 1;
+    uploadDesc.MipLevels = 1;
+    uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uploadDesc.SampleDesc.Count = 1;
+    uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer));
+    if (FAILED(hr)) return false;
+
+    void* pData;
+    D3D12_RANGE readRange = {0, 0};
+    uploadBuffer->Map(0, &readRange, &pData);
+    memcpy(pData, imageData.data(), imageSize);
+    uploadBuffer->Unmap(0, nullptr);
+
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = texture.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = uploadBuffer.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    src.PlacedFootprint.Footprint.Width = width;
+    src.PlacedFootprint.Footprint.Height = height;
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = rowPitch;
+
+    g_commandList->Reset(g_commandAllocator.Get(), nullptr);
+    g_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = texture.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    g_commandList->ResourceBarrier(1, &barrier);
+    g_commandList->Close();
+
+    ID3D12CommandList* cmdList = g_commandList.Get();
+    g_commandQueue->ExecuteCommandLists(1, &cmdList);
+    WaitForGpu();
 
     return true;
 }
 
-// ==================== Window Proc with Resize ====================
+// ==================== Window Proc ====================
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_DESTROY) {
         PostQuitMessage(0);
@@ -171,15 +227,13 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
     if (message == WM_SIZE) {
         g_windowWidth = LOWORD(lParam);
         g_windowHeight = HIWORD(lParam);
-        // TODO: Resize swapchain (advanced - for now we just update constants)
         return 0;
     }
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-// ==================== Init & Create ====================
+// ==================== Init ====================
 bool InitD3D12(HWND hwnd) {
-    // Same as previous version...
     ComPtr<IDXGIFactory6> factory;
     CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
 
@@ -209,7 +263,6 @@ bool InitD3D12(HWND hwnd) {
     tempSwap.As(&g_swapChain);
     g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 
-    // RTV Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtvDesc = {};
     rtvDesc.NumDescriptors = 2;
     rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -230,9 +283,8 @@ bool InitD3D12(HWND hwnd) {
     g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence));
     g_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-    // CBV + SRV Heap
     D3D12_DESCRIPTOR_HEAP_DESC cbvSrvDesc = {};
-    cbvSrvDesc.NumDescriptors = 2; // 1 CBV + 1 SRV
+    cbvSrvDesc.NumDescriptors = 2;
     cbvSrvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     cbvSrvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     g_device->CreateDescriptorHeap(&cbvSrvDesc, IID_PPV_ARGS(&g_cbvSrvHeap));
@@ -247,7 +299,7 @@ bool CreateConstantBuffer() {
 
     D3D12_RESOURCE_DESC resDesc = {};
     resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    resDesc.Width = (sizeof(Constants) + 255) & ~255; // 256 byte aligned
+    resDesc.Width = (sizeof(Constants) + 255) & ~255;
     resDesc.Height = 1;
     resDesc.DepthOrArraySize = 1;
     resDesc.MipLevels = 1;
@@ -262,7 +314,6 @@ bool CreateConstantBuffer() {
 }
 
 bool CreatePipelineState() {
-    // Root Signature with CBV + SRV
     D3D12_DESCRIPTOR_RANGE srvRange = {};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRange.NumDescriptors = 1;
@@ -363,6 +414,17 @@ bool CreateVertexBuffer() {
     return true;
 }
 
+void WaitForGpu() {
+    UINT64 fence = g_fenceValue;
+    g_commandQueue->Signal(g_fence.Get(), fence);
+    g_fenceValue++;
+    if (g_fence->GetCompletedValue() < fence) {
+        g_fence->SetEventOnCompletion(fence, g_fenceEvent);
+        WaitForSingleObject(g_fenceEvent, INFINITE);
+    }
+    g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
+}
+
 void UpdateConstantBuffer() {
     Constants constants = {};
     constants.windowWidth = (float)g_windowWidth;
@@ -442,7 +504,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     UINT texW, texH;
     if (!LoadTextureFromFile(L"test.png", g_texture, texW, texH)) return 1;
 
-    // SRV
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -450,7 +511,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     srvDesc.Texture2D.MipLevels = 1;
     g_device->CreateShaderResourceView(g_texture.Get(), &srvDesc, g_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // CBV
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
     cbvDesc.BufferLocation = g_constantBuffer->GetGPUVirtualAddress();
     cbvDesc.SizeInBytes = (sizeof(Constants) + 255) & ~255;
