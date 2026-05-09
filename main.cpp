@@ -430,7 +430,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     if (!CreateVertexBuffer()) { MessageBoxA(nullptr, "Vertex Buffer Failed", "Error", MB_OK); return 1; }
 
     UINT texWidth, texHeight;
-    if (!LoadTextureFromFile(L"test.png", g_texture, texWidth, texHeight)) {
+    if (!LoadTextureFromFile(L"test.jpg", g_texture, texWidth, texHeight)) {
         MessageBoxA(nullptr, "test.png file not found!\nPut the image in the same folder as the exe.", "Error", MB_OK);
         return 1;
     }
