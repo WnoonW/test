@@ -1,5 +1,5 @@
+#include "d3dx12.h"
 #include <windows.h>
-#include <d3d12.h>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
@@ -322,20 +322,27 @@ bool CreateConstantBuffer() {
 }
 
 bool CreatePipelineState() {
-    D3D12_DESCRIPTOR_RANGE srvRange = {};
-    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 1;
-    srvRange.BaseShaderRegister = 0;
+    // CD3DX12 없이 순수 D3D12 구조체로 작성
+    D3D12_DESCRIPTOR_RANGE Ranges[2] = {};
 
-    D3D12_ROOT_PARAMETER params[2] = {};
-    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[0].Descriptor.ShaderRegister = 0;
-    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    Ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+    Ranges[0].NumDescriptors = 1;
+    Ranges[0].BaseShaderRegister = 0;
+    Ranges[0].RegisterSpace = 0;
+    Ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 1;
-    params[1].DescriptorTable.pDescriptorRanges = &srvRange;
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    Ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    Ranges[1].NumDescriptors = 1;
+    Ranges[1].BaseShaderRegister = 0;
+    Ranges[1].RegisterSpace = 0;
+    Ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slotRootParameter[1] = {};
+
+    slotRootParameter[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slotRootParameter[0].DescriptorTable.NumDescriptorRanges = _countof(Ranges);
+    slotRootParameter[0].DescriptorTable.pDescriptorRanges = Ranges;
+    slotRootParameter[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -353,8 +360,8 @@ bool CreatePipelineState() {
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 2;
-    rootDesc.pParameters = params;
+    rootDesc.NumParameters = 1;
+    rootDesc.pParameters = slotRootParameter;
     rootDesc.NumStaticSamplers = 1;
     rootDesc.pStaticSamplers = &sampler;
     rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
@@ -486,10 +493,10 @@ void Render() {
 
     ID3D12DescriptorHeap* heaps[] = { g_cbvSrvHeap.Get() };
     g_commandList->SetDescriptorHeaps(1, heaps);
-
     g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
-    g_commandList->SetGraphicsRootConstantBufferView(0, g_constantBuffer->GetGPUVirtualAddress());
-    g_commandList->SetGraphicsRootDescriptorTable(1, g_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    D3D12_GPU_DESCRIPTOR_HANDLE tableStart = g_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart();
+    g_commandList->SetGraphicsRootDescriptorTable(0, tableStart);
 
     g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
@@ -531,17 +538,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     UINT texW, texH;
     if (!LoadTextureFromFile(L"test.png", g_texture, texW, texH)) return 1;
 
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+    cbvDesc.BufferLocation = g_constantBuffer->GetGPUVirtualAddress();
+    cbvDesc.SizeInBytes = (sizeof(Constants) + 255) & ~255;
+    g_device->CreateConstantBufferView(&cbvDesc, g_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(
+        g_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+        1,                                 // offset 1
+        g_cbvSrvDescriptorSize);
+
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
-    g_device->CreateShaderResourceView(g_texture.Get(), &srvDesc, g_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
+    g_device->CreateShaderResourceView(g_texture.Get(), &srvDesc, srvHandle);
 
-    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-    cbvDesc.BufferLocation = g_constantBuffer->GetGPUVirtualAddress();
-    cbvDesc.SizeInBytes = (sizeof(Constants) + 255) & ~255;
-    g_device->CreateConstantBufferView(&cbvDesc, g_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 
     MSG msg = {};
     while (msg.message != WM_QUIT) {
